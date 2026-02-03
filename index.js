@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 
 import videoRoutes from './routes/video.js';
+import adminRoutes from './routes/admin.js';
 
 dotenv.config();
 
@@ -19,6 +20,7 @@ app.get('/', (req, res) => {
 
 // API routes
 app.use('/api', videoRoutes);
+app.use('/admin', adminRoutes);
 
 app.use((err, req, res, next) => {
   console.error(err);
