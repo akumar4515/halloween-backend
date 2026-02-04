@@ -24,7 +24,7 @@ app.get('/', (req, res) => {
 // API routes
 app.use('/api', videoRoutes);
 app.use('/admin', adminRoutes);
-app.use('/auth', authRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/user', userRoutes);
 app.use('/api/eporner', epornerRoutes);
 
