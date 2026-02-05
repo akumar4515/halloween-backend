@@ -41,13 +41,13 @@ const buildFrontendRedirect = (params) => {
   return url.toString();
 };
 
-const upsertGoogleUser = async ({ id, email, name, picture }) => {
+const upsertGoogleUser = async ({ id, email, name }) => {
   if (!email) {
     throw new Error('Google account did not return an email');
   }
 
   const [byGoogleId] = await pool.query(
-    'SELECT id, email, name, picture, subscription, is_active FROM users WHERE google_id = ?',
+    'SELECT id, email, name, subscription, is_active FROM users WHERE google_id = ?',
     [id]
   );
 
@@ -57,11 +57,11 @@ const upsertGoogleUser = async ({ id, email, name, picture }) => {
       throw new Error('Account is deactivated');
     }
     await pool.query(
-      'UPDATE users SET email = ?, name = ?, picture = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-      [email, name, picture, existing.id]
+      'UPDATE users SET email = ?, name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [email, name, existing.id]
     );
     const [updated] = await pool.query(
-      'SELECT id, email, name, picture, subscription, is_active FROM users WHERE id = ?',
+      'SELECT id, email, name, subscription, is_active FROM users WHERE id = ?',
       [existing.id]
     );
     return updated[0];
@@ -78,23 +78,23 @@ const upsertGoogleUser = async ({ id, email, name, picture }) => {
       throw new Error('Account is deactivated');
     }
     await pool.query(
-      'UPDATE users SET google_id = ?, name = ?, picture = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
-      [id, name, picture, existing.id]
+      'UPDATE users SET google_id = ?, name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [id, name, existing.id]
     );
     const [updated] = await pool.query(
-      'SELECT id, email, name, picture, subscription, is_active FROM users WHERE id = ?',
+      'SELECT id, email, name, subscription, is_active FROM users WHERE id = ?',
       [existing.id]
     );
     return updated[0];
   }
 
   const [result] = await pool.query(
-    'INSERT INTO users (google_id, email, name, picture, provider) VALUES (?, ?, ?, ?, ?)',
-    [id, email, name, picture, 'google']
+    'INSERT INTO users (google_id, email, name, provider) VALUES (?, ?, ?, ?)',
+    [id, email, name, 'google']
   );
 
   const [created] = await pool.query(
-    'SELECT id, email, name, picture, subscription, is_active FROM users WHERE id = ?',
+    'SELECT id, email, name, subscription, is_active FROM users WHERE id = ?',
     [result.insertId]
   );
 
@@ -143,7 +143,6 @@ router.get('/google/callback', async (req, res) => {
       id: data.id,
       email: data.email,
       name: data.name,
-      picture: data.picture,
     });
 
     const token = signToken(user.id);
@@ -176,7 +175,6 @@ router.post('/google/verify', async (req, res, next) => {
       id: payload.sub,
       email: payload.email,
       name: payload.name,
-      picture: payload.picture,
     });
 
     const token = signToken(user.id);
