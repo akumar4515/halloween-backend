@@ -6,188 +6,195 @@ import { authenticateToken } from '../middleware/auth.js';
 
 const router = Router();
 
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
-const BACKEND_URL = process.env.BACKEND_URL || process.env.BASE_URL || 'http://localhost:5000';
-const GOOGLE_REDIRECT_URI =
-  process.env.GOOGLE_REDIRECT_URI || `${BACKEND_URL}/api/auth/google/callback`;
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this';
-
-const oauthClient = new OAuth2Client(
+const {
   GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET,
-  GOOGLE_REDIRECT_URI
-);
+  GOOGLE_REDIRECT_URI,
+  FRONTEND_URL,
+  JWT_SECRET,
+} = process.env;
 
-const signToken = (user) =>
-  jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+const getOAuthClient = () => {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    return null;
+  }
+  return new OAuth2Client(
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    GOOGLE_REDIRECT_URI || 'http://localhost:5000/api/auth/google/callback'
+  );
+};
 
-const normalizeUser = (row) => ({
-  id: row.id,
-  email: row.email,
-  name: row.name,
-  picture: row.picture,
-  provider: row.provider,
-  subscription: row.subscription,
-  created_at: row.created_at,
-});
+const signToken = (userId) =>
+  jwt.sign({ id: userId }, JWT_SECRET || 'your-secret-key-change-this', {
+    expiresIn: '7d',
+  });
 
-const upsertGoogleUser = async ({ googleId, email, name, picture }) => {
-  const [existing] = await pool.query(
-    'SELECT id FROM users WHERE google_id = ? OR email = ? LIMIT 1',
-    [googleId, email]
+const buildFrontendRedirect = (params) => {
+  const baseUrl = FRONTEND_URL || 'http://localhost:3000';
+  const url = new URL('/auth/callback', baseUrl);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      url.searchParams.set(key, value);
+    }
+  });
+  return url.toString();
+};
+
+const upsertGoogleUser = async ({ id, email, name, picture }) => {
+  if (!email) {
+    throw new Error('Google account did not return an email');
+  }
+
+  const [byGoogleId] = await pool.query(
+    'SELECT id, email, name, picture, subscription, is_active FROM users WHERE google_id = ?',
+    [id]
   );
 
-  if (existing.length > 0) {
-    const userId = existing[0].id;
+  if (byGoogleId.length > 0) {
+    const existing = byGoogleId[0];
+    if (!existing.is_active) {
+      throw new Error('Account is deactivated');
+    }
     await pool.query(
-      `UPDATE users
-       SET google_id = ?, email = ?, name = ?, picture = ?, provider = 'google', is_active = 1
-       WHERE id = ?`,
-      [googleId, email, name, picture, userId]
+      'UPDATE users SET email = ?, name = ?, picture = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [email, name, picture, existing.id]
     );
-    const [rows] = await pool.query(
-      'SELECT id, email, name, picture, provider, subscription, created_at FROM users WHERE id = ?',
-      [userId]
+    const [updated] = await pool.query(
+      'SELECT id, email, name, picture, subscription, is_active FROM users WHERE id = ?',
+      [existing.id]
     );
-    return rows[0];
+    return updated[0];
+  }
+
+  const [byEmail] = await pool.query(
+    'SELECT id, google_id, is_active FROM users WHERE email = ?',
+    [email]
+  );
+
+  if (byEmail.length > 0) {
+    const existing = byEmail[0];
+    if (!existing.is_active) {
+      throw new Error('Account is deactivated');
+    }
+    await pool.query(
+      'UPDATE users SET google_id = ?, name = ?, picture = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [id, name, picture, existing.id]
+    );
+    const [updated] = await pool.query(
+      'SELECT id, email, name, picture, subscription, is_active FROM users WHERE id = ?',
+      [existing.id]
+    );
+    return updated[0];
   }
 
   const [result] = await pool.query(
-    `INSERT INTO users (google_id, email, name, picture, provider, is_active)
-     VALUES (?, ?, ?, ?, 'google', 1)`,
-    [googleId, email, name, picture]
+    'INSERT INTO users (google_id, email, name, picture, provider) VALUES (?, ?, ?, ?, ?)',
+    [id, email, name, picture, 'google']
   );
 
-  const [rows] = await pool.query(
-    'SELECT id, email, name, picture, provider, subscription, created_at FROM users WHERE id = ?',
+  const [created] = await pool.query(
+    'SELECT id, email, name, picture, subscription, is_active FROM users WHERE id = ?',
     [result.insertId]
   );
-  return rows[0];
+
+  return created[0];
 };
 
-// GET /api/auth/google - Redirect to Google OAuth consent
 router.get('/google', (req, res) => {
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+  const oauthClient = getOAuthClient();
+  if (!oauthClient) {
     return res.status(500).json({ error: 'Google OAuth is not configured' });
   }
 
-  const authUrl = oauthClient.generateAuthUrl({
+  const url = oauthClient.generateAuthUrl({
     access_type: 'offline',
-    prompt: 'select_account',
-    scope: ['openid', 'email', 'profile'],
+    prompt: 'consent',
+    scope: ['profile', 'email'],
   });
 
-  res.redirect(authUrl);
+  return res.redirect(url);
 });
 
-// GET /api/auth/google/callback - Handle OAuth callback
-router.get('/google/callback', async (req, res, next) => {
+router.get('/google/callback', async (req, res) => {
+  const oauthClient = getOAuthClient();
+  if (!oauthClient) {
+    return res.redirect(buildFrontendRedirect({ error: 'OAuth not configured' }));
+  }
+
+  if (req.query.error) {
+    return res.redirect(buildFrontendRedirect({ error: req.query.error }));
+  }
+
+  const { code } = req.query;
+  if (!code) {
+    return res.redirect(buildFrontendRedirect({ error: 'Missing code' }));
+  }
+
   try {
-    if (req.query.error) {
-      const error = encodeURIComponent(req.query.error);
-      return res.redirect(`${FRONTEND_URL}/auth/callback?success=false&error=${error}`);
-    }
-
-    const code = req.query.code;
-    if (!code) {
-      return res.redirect(
-        `${FRONTEND_URL}/auth/callback?success=false&error=missing_code`
-      );
-    }
-
     const { tokens } = await oauthClient.getToken(code);
-    const idToken = tokens.id_token;
+    oauthClient.setCredentials(tokens);
 
-    if (!idToken) {
-      return res.redirect(
-        `${FRONTEND_URL}/auth/callback?success=false&error=missing_id_token`
-      );
-    }
-
-    const ticket = await oauthClient.verifyIdToken({
-      idToken,
-      audience: GOOGLE_CLIENT_ID,
+    const { data } = await oauthClient.request({
+      url: 'https://www.googleapis.com/oauth2/v2/userinfo',
     });
-
-    const payload = ticket.getPayload();
-    if (!payload || !payload.email) {
-      return res.redirect(
-        `${FRONTEND_URL}/auth/callback?success=false&error=missing_profile`
-      );
-    }
 
     const user = await upsertGoogleUser({
-      googleId: payload.sub,
-      email: payload.email,
-      name: payload.name || payload.given_name || 'User',
-      picture: payload.picture || '',
+      id: data.id,
+      email: data.email,
+      name: data.name,
+      picture: data.picture,
     });
 
-    const token = signToken(user);
-    const encodedToken = encodeURIComponent(token);
-    res.redirect(`${FRONTEND_URL}/auth/callback?success=true&token=${encodedToken}`);
-  } catch (err) {
-    next(err);
+    const token = signToken(user.id);
+    return res.redirect(buildFrontendRedirect({ token }));
+  } catch (error) {
+    const message = error?.message || 'Google authentication failed';
+    return res.redirect(buildFrontendRedirect({ error: message }));
   }
 });
 
-// POST /api/auth/google/verify - Verify Google ID token from client
 router.post('/google/verify', async (req, res, next) => {
   try {
-    const { idToken } = req.body;
-    if (!idToken) {
-      return res.status(400).json({ error: 'idToken is required' });
+    const oauthClient = getOAuthClient();
+    if (!oauthClient) {
+      return res.status(500).json({ error: 'Google OAuth is not configured' });
+    }
+
+    const credential = req.body?.credential || req.body?.id_token;
+    if (!credential) {
+      return res.status(400).json({ error: 'credential is required' });
     }
 
     const ticket = await oauthClient.verifyIdToken({
-      idToken,
+      idToken: credential,
       audience: GOOGLE_CLIENT_ID,
     });
 
     const payload = ticket.getPayload();
-    if (!payload || !payload.email) {
-      return res.status(400).json({ error: 'Invalid Google token payload' });
-    }
-
     const user = await upsertGoogleUser({
-      googleId: payload.sub,
+      id: payload.sub,
       email: payload.email,
-      name: payload.name || payload.given_name || 'User',
-      picture: payload.picture || '',
+      name: payload.name,
+      picture: payload.picture,
     });
 
-    const token = signToken(user);
+    const token = signToken(user.id);
     res.json({
       success: true,
       token,
-      user: normalizeUser(user),
+      user,
     });
   } catch (err) {
     next(err);
   }
 });
 
-// GET /api/auth/me - Get current user
-router.get('/me', authenticateToken, async (req, res, next) => {
-  try {
-    const [rows] = await pool.query(
-      'SELECT id, email, name, picture, provider, subscription, created_at FROM users WHERE id = ?',
-      [req.user.id]
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    res.json({
-      success: true,
-      user: normalizeUser(rows[0]),
-    });
-  } catch (err) {
-    next(err);
-  }
+router.get('/me', authenticateToken, (req, res) => {
+  res.json({
+    success: true,
+    user: req.user,
+  });
 });
 
 export default router;

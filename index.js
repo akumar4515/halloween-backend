@@ -4,9 +4,10 @@ import dotenv from 'dotenv';
 
 import videoRoutes from './routes/video.js';
 import adminRoutes from './routes/admin.js';
-import authRoutes from './routes/auth.js';
+
 import userRoutes from './routes/user.js';
 import epornerRoutes from './routes/eporner.js';
+import authRoutes from './routes/auth.js';
 
 dotenv.config();
 
@@ -24,8 +25,9 @@ app.get('/', (req, res) => {
 // API routes
 app.use('/api', videoRoutes);
 app.use('/admin', adminRoutes);
-app.use('/api/auth', authRoutes);
+
 app.use('/user', userRoutes);
+app.use('/api/auth', authRoutes);
 app.use('/api/eporner', epornerRoutes);
 
 app.use((err, req, res, next) => {
