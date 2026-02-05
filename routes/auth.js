@@ -7,10 +7,13 @@ import { authenticateToken } from '../middleware/auth.js';
 const router = Router();
 
 // Initialize Google OAuth client
+const backendUrl = process.env.BACKEND_URL || process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${backendUrl}/api/auth/google/callback`;
+
 const client = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI || `${process.env.BASE_URL || 'http://localhost:3000'}/auth/google/callback`
+  redirectUri
 );
 
 // GET /auth/google - Initiate Google OAuth flow
