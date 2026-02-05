@@ -1,203 +1,189 @@
 import { Router } from 'express';
-import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
+import { OAuth2Client } from 'google-auth-library';
 import pool from '../config/db.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 const router = Router();
 
-// Initialize Google OAuth client
-const backendUrl = process.env.BACKEND_URL || process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-const redirectUri = process.env.GOOGLE_REDIRECT_URI || `${backendUrl}/api/auth/google/callback`;
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+const BACKEND_URL = process.env.BACKEND_URL || process.env.BASE_URL || 'http://localhost:5000';
+const GOOGLE_REDIRECT_URI =
+  process.env.GOOGLE_REDIRECT_URI || `${BACKEND_URL}/api/auth/google/callback`;
+const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-this';
 
-const client = new OAuth2Client(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  redirectUri
+const oauthClient = new OAuth2Client(
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  GOOGLE_REDIRECT_URI
 );
 
-// GET /auth/google - Initiate Google OAuth flow
+const signToken = (user) =>
+  jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
+
+const normalizeUser = (row) => ({
+  id: row.id,
+  email: row.email,
+  name: row.name,
+  picture: row.picture,
+  provider: row.provider,
+  subscription: row.subscription,
+  created_at: row.created_at,
+});
+
+const upsertGoogleUser = async ({ googleId, email, name, picture }) => {
+  const [existing] = await pool.query(
+    'SELECT id FROM users WHERE google_id = ? OR email = ? LIMIT 1',
+    [googleId, email]
+  );
+
+  if (existing.length > 0) {
+    const userId = existing[0].id;
+    await pool.query(
+      `UPDATE users
+       SET google_id = ?, email = ?, name = ?, picture = ?, provider = 'google', is_active = 1
+       WHERE id = ?`,
+      [googleId, email, name, picture, userId]
+    );
+    const [rows] = await pool.query(
+      'SELECT id, email, name, picture, provider, subscription, created_at FROM users WHERE id = ?',
+      [userId]
+    );
+    return rows[0];
+  }
+
+  const [result] = await pool.query(
+    `INSERT INTO users (google_id, email, name, picture, provider, is_active)
+     VALUES (?, ?, ?, ?, 'google', 1)`,
+    [googleId, email, name, picture]
+  );
+
+  const [rows] = await pool.query(
+    'SELECT id, email, name, picture, provider, subscription, created_at FROM users WHERE id = ?',
+    [result.insertId]
+  );
+  return rows[0];
+};
+
+// GET /api/auth/google - Redirect to Google OAuth consent
 router.get('/google', (req, res) => {
-  const authUrl = client.generateAuthUrl({
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    return res.status(500).json({ error: 'Google OAuth is not configured' });
+  }
+
+  const authUrl = oauthClient.generateAuthUrl({
     access_type: 'offline',
-    scope: [
-      'https://www.googleapis.com/auth/userinfo.email',
-      'https://www.googleapis.com/auth/userinfo.profile'
-    ],
-    prompt: 'consent'
+    prompt: 'select_account',
+    scope: ['openid', 'email', 'profile'],
   });
-  
+
   res.redirect(authUrl);
 });
 
-// GET /auth/google/callback - Handle Google OAuth callback
+// GET /api/auth/google/callback - Handle OAuth callback
 router.get('/google/callback', async (req, res, next) => {
   try {
-    const { code } = req.query;
+    if (req.query.error) {
+      const error = encodeURIComponent(req.query.error);
+      return res.redirect(`${FRONTEND_URL}/auth/callback?success=false&error=${error}`);
+    }
 
+    const code = req.query.code;
     if (!code) {
-      return res.status(400).json({ error: 'Authorization code is required' });
+      return res.redirect(
+        `${FRONTEND_URL}/auth/callback?success=false&error=missing_code`
+      );
     }
 
-    // Exchange code for tokens
-    const { tokens } = await client.getToken(code);
-    client.setCredentials(tokens);
+    const { tokens } = await oauthClient.getToken(code);
+    const idToken = tokens.id_token;
 
-    if (!tokens.id_token) {
-      return res.status(400).json({ error: 'ID token not received from Google' });
+    if (!idToken) {
+      return res.redirect(
+        `${FRONTEND_URL}/auth/callback?success=false&error=missing_id_token`
+      );
     }
 
-    // Get user info from Google
-    const ticket = await client.verifyIdToken({
-      idToken: tokens.id_token,
-      audience: process.env.GOOGLE_CLIENT_ID
+    const ticket = await oauthClient.verifyIdToken({
+      idToken,
+      audience: GOOGLE_CLIENT_ID,
     });
 
     const payload = ticket.getPayload();
-    const { sub: googleId, email, name, picture } = payload;
-
-    if (!email) {
-      return res.status(400).json({ error: 'Email not provided by Google' });
+    if (!payload || !payload.email) {
+      return res.redirect(
+        `${FRONTEND_URL}/auth/callback?success=false&error=missing_profile`
+      );
     }
 
-    // Check if user exists
-    let [users] = await pool.query(
-      'SELECT * FROM users WHERE email = ? OR google_id = ?',
-      [email, googleId]
-    );
+    const user = await upsertGoogleUser({
+      googleId: payload.sub,
+      email: payload.email,
+      name: payload.name || payload.given_name || 'User',
+      picture: payload.picture || '',
+    });
 
-    let user;
-    if (users.length > 0) {
-      // Update existing user
-      user = users[0];
-      await pool.query(
-        `UPDATE users 
-         SET google_id = ?, name = ?, picture = ?, updated_at = CURRENT_TIMESTAMP 
-         WHERE id = ?`,
-        [googleId, name, picture, user.id]
-      );
-      user.google_id = googleId;
-      user.name = name;
-      user.picture = picture;
-    } else {
-      // Create new user
-      const [result] = await pool.query(
-        `INSERT INTO users (google_id, email, name, picture, provider) 
-         VALUES (?, ?, ?, ?, 'google')`,
-        [googleId, email, name, picture]
-      );
-      [users] = await pool.query('SELECT * FROM users WHERE id = ?', [result.insertId]);
-      user = users[0];
-    }
-
-    // Generate JWT token
-    const token = jwt.sign(
-      { 
-        id: user.id, 
-        email: user.email,
-        name: user.name 
-      },
-      process.env.JWT_SECRET || 'your-secret-key-change-this',
-      { expiresIn: '7d' }
-    );
-
-    // Redirect to frontend with token (or return JSON)
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
-    res.redirect(`${frontendUrl}/auth/callback?token=${token}&success=true`);
+    const token = signToken(user);
+    const encodedToken = encodeURIComponent(token);
+    res.redirect(`${FRONTEND_URL}/auth/callback?success=true&token=${encodedToken}`);
   } catch (err) {
     next(err);
   }
 });
 
-// POST /auth/google/verify - Verify Google ID token (alternative method for mobile/web apps)
+// POST /api/auth/google/verify - Verify Google ID token from client
 router.post('/google/verify', async (req, res, next) => {
   try {
     const { idToken } = req.body;
-
     if (!idToken) {
-      return res.status(400).json({ error: 'ID token is required' });
+      return res.status(400).json({ error: 'idToken is required' });
     }
 
-    // Verify the token
-    const ticket = await client.verifyIdToken({
-      idToken: idToken,
-      audience: process.env.GOOGLE_CLIENT_ID
+    const ticket = await oauthClient.verifyIdToken({
+      idToken,
+      audience: GOOGLE_CLIENT_ID,
     });
 
     const payload = ticket.getPayload();
-    const { sub: googleId, email, name, picture } = payload;
-
-    if (!email) {
-      return res.status(400).json({ error: 'Email not provided by Google' });
+    if (!payload || !payload.email) {
+      return res.status(400).json({ error: 'Invalid Google token payload' });
     }
 
-    // Check if user exists
-    let [users] = await pool.query(
-      'SELECT * FROM users WHERE email = ? OR google_id = ?',
-      [email, googleId]
-    );
+    const user = await upsertGoogleUser({
+      googleId: payload.sub,
+      email: payload.email,
+      name: payload.name || payload.given_name || 'User',
+      picture: payload.picture || '',
+    });
 
-    let user;
-    if (users.length > 0) {
-      // Update existing user
-      user = users[0];
-      await pool.query(
-        `UPDATE users 
-         SET google_id = ?, name = ?, picture = ?, updated_at = CURRENT_TIMESTAMP 
-         WHERE id = ?`,
-        [googleId, name, picture, user.id]
-      );
-      user.google_id = googleId;
-      user.name = name;
-      user.picture = picture;
-    } else {
-      // Create new user
-      const [result] = await pool.query(
-        `INSERT INTO users (google_id, email, name, picture, provider) 
-         VALUES (?, ?, ?, ?, 'google')`,
-        [googleId, email, name, picture]
-      );
-      [users] = await pool.query('SELECT * FROM users WHERE id = ?', [result.insertId]);
-      user = users[0];
-    }
-
-    // Generate JWT token
-    const token = jwt.sign(
-      { 
-        id: user.id, 
-        email: user.email,
-        name: user.name 
-      },
-      process.env.JWT_SECRET || 'your-secret-key-change-this',
-      { expiresIn: '7d' }
-    );
-
+    const token = signToken(user);
     res.json({
       success: true,
       token,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        picture: user.picture
-      }
+      user: normalizeUser(user),
     });
   } catch (err) {
     next(err);
   }
 });
 
-// GET /auth/me - Get current user (protected route)
+// GET /api/auth/me - Get current user
 router.get('/me', authenticateToken, async (req, res, next) => {
   try {
-    const [users] = await pool.query(
+    const [rows] = await pool.query(
       'SELECT id, email, name, picture, provider, subscription, created_at FROM users WHERE id = ?',
       [req.user.id]
     );
-    
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
     res.json({
       success: true,
-      user: users[0]
+      user: normalizeUser(rows[0]),
     });
   } catch (err) {
     next(err);
@@ -205,4 +191,3 @@ router.get('/me', authenticateToken, async (req, res, next) => {
 });
 
 export default router;
-
