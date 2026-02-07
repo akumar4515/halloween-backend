@@ -13,13 +13,16 @@ const EP_PATHS = {
   videoSearch: '/api/v2/video/search/',
   videoById: '/api/v2/video/id/',
   videoList: '/api/v2/video/list/',
+  categories: '/api/v2/categories/',
   // Alternative paths (without trailing slash)
   videoSearchAlt: '/api/v2/video/search',
   videoByIdAlt: '/api/v2/video/id',
   videoListAlt: '/api/v2/video/list',
+  categoriesAlt: '/api/v2/categories',
   // Alternative API structure
   videoSearchAlt2: '/api/video/search/',
   videoByIdAlt2: '/api/video/id/',
+  categoriesAlt2: '/api/categories/',
 };
 
 // Helper function to extract video URL from Eporner response
@@ -134,6 +137,77 @@ function formatVideoData(video, size = 'big') {
 }
 
 // ==================== VIDEO ROUTES ====================
+
+// GET /api/eporner/categories
+router.get('/categories', async (req, res) => {
+  try {
+    const endpoints = [
+      EP_PATHS.categories,
+      EP_PATHS.categoriesAlt,
+      EP_PATHS.categoriesAlt2,
+    ];
+
+    let data = null;
+    const errors = [];
+
+    for (const endpoint of endpoints) {
+      try {
+        data = await epornerGet(endpoint, {});
+        if (data) {
+          console.log(`[Eporner API] Categories success with endpoint: ${endpoint}`);
+          break;
+        }
+      } catch (err) {
+        errors.push({
+          endpoint,
+          status: err.status,
+          message: err.message,
+          url: err.url
+        });
+        console.error(`[Eporner API] Categories endpoint ${endpoint} failed:`, {
+          status: err.status,
+          message: err.message
+        });
+      }
+    }
+
+    if (!data) {
+      console.error('[Eporner API] All categories endpoints failed. Errors:', errors);
+      return res.status(200).json({
+        success: true,
+        data: [],
+        note: 'No categories found. Eporner API endpoints may be unavailable or incorrect.'
+      });
+    }
+
+    const rawCategories =
+      data.categories ||
+      data.data ||
+      data.items ||
+      [];
+
+    const categories = Array.isArray(rawCategories)
+      ? rawCategories.map((cat) => ({
+          id: cat.id || cat.category_id || cat.slug || cat.name || null,
+          name: cat.name || cat.title || cat.slug || String(cat.id || ''),
+          video_count: cat.count || cat.video_count || cat.videos || null,
+          raw: cat
+        }))
+      : [];
+
+    return res.json({
+      success: true,
+      data: categories
+    });
+  } catch (error) {
+    console.error('[Eporner API] Error fetching categories:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch categories',
+      message: error.message
+    });
+  }
+});
 
 // GET /api/eporner/videos/search?query=...&page=...&per_page=...&order=...&thumbsize=...
 router.get('/videos/search', async (req, res) => {

@@ -3,6 +3,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 
 import epornerRoutes from './routes/eporner.js';
+import affiliateRoutes from './routes/affiliate.js';
+import adminRoutes from './routes/admin.js';
 
 dotenv.config();
 
@@ -19,6 +21,8 @@ app.get('/', (req, res) => {
 
 // API routes
 app.use('/api/eporner', epornerRoutes);
+app.use('/api/affiliate', affiliateRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.use((err, req, res, next) => {
   console.error(err);
@@ -28,5 +32,10 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`Server running on port ${PORT}`);
+  console.log('Available routes:');
+  console.log('  - GET /');
+  console.log('  - GET /api/eporner/*');
+  console.log('  - GET /api/affiliate/*');
+  console.log('  - POST /api/admin/*');
 });
 
