@@ -40,63 +40,136 @@ const authenticateAdmin = (req, res, next) => {
 
 const CSV_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 
-// Column mapping (handles # prefix - just strips # and maps to lowercase database column names)
+// Column mapping (handles # prefix and uppercase - just strips # and maps to lowercase database column names)
 // The database columns already match the CSV format (without # prefix)
 const columnMapping = {
-  // For affiliate_videos table
+  // For affiliate_videos table - ID column
   '#id': 'provider_video_id',
   'id': 'provider_video_id',
+  'ID': 'provider_video_id',
+  '#ID': 'provider_video_id',
+  // Embed/iframe
   '#embed': 'iframe_url',
   'embed': 'iframe_url',
+  'EMBED': 'iframe_url',
+  '#EMBED': 'iframe_url',
+  // Video URL
   '#url': 'video_url',
   'url': 'video_url',
+  'URL': 'video_url',
+  '#URL': 'video_url',
+  // Affiliate URL
   '#affiliate_url': 'affiliate_url',
   'affiliate_url': 'affiliate_url',
+  'AFFILIATE_URL': 'affiliate_url',
+  '#AFFILIATE_URL': 'affiliate_url',
+  // Thumbnail URLs
   '#url_thumb': 'thumbnail_url',
   'url_thumb': 'thumbnail_url',
+  'URL_THUMB': 'thumbnail_url',
+  '#URL_THUMB': 'thumbnail_url',
   '#thumb': 'thumbnail_url',
   'thumb': 'thumbnail_url',
+  'THUMB': 'thumbnail_url',
+  '#THUMB': 'thumbnail_url',
   '#thumbs': 'thumbnail_url',
   'thumbs': 'thumbnail_url',
+  'THUMBS': 'thumbnail_url',
+  '#THUMBS': 'thumbnail_url',
   '#thumbnail': 'thumbnail_url',
   'thumbnail': 'thumbnail_url',
+  'THUMBNAIL': 'thumbnail_url',
+  '#THUMBNAIL': 'thumbnail_url',
+  // Title
   '#title': 'title',
   'title': 'title',
+  'TITLE': 'title',
+  '#TITLE': 'title',
+  // Description
   '#description': 'description',
   'description': 'description',
+  'DESCRIPTION': 'description',
+  '#DESCRIPTION': 'description',
   '#desc': 'description',
   'desc': 'description',
+  'DESC': 'description',
+  '#DESC': 'description',
+  // Channels/Studio
   '#channel': 'channels',
   'channel': 'channels',
+  'CHANNEL': 'channels',
+  '#CHANNEL': 'channels',
   '#channels': 'channels',
   'channels': 'channels',
+  'CHANNELS': 'channels',
+  '#CHANNELS': 'channels',
   '#studio': 'channels',
   'studio': 'channels',
+  'STUDIO': 'channels',
+  '#STUDIO': 'channels',
   '#sname': 'channels',
   'sname': 'channels',
+  'SNAME': 'channels',
+  '#SNAME': 'channels',
+  // Duration
   '#duration': 'duration',
   'duration': 'duration',
+  'DURATION': 'duration',
+  '#DURATION': 'duration',
   '#dur': 'duration',
   'dur': 'duration',
+  'DUR': 'duration',
+  '#DUR': 'duration',
+  // Embed Duration
   '#duration_embed': 'embed_duration',
   'duration_embed': 'embed_duration',
+  'DURATION_EMBED': 'embed_duration',
+  '#DURATION_EMBED': 'embed_duration',
   '#embdur': 'embed_duration',
   'embdur': 'embed_duration',
+  'EMBDUR': 'embed_duration',
+  '#EMBDUR': 'embed_duration',
+  // Date
   '#date': 'published_at',
   'date': 'published_at',
+  'DATE': 'published_at',
+  '#DATE': 'published_at',
   '#dt': 'published_at',
   'dt': 'published_at',
+  'DT': 'published_at',
+  '#DT': 'published_at',
+  // Trailer
   '#trailer': 'trailer_url',
   'trailer': 'trailer_url',
+  'TRAILER': 'trailer_url',
+  '#TRAILER': 'trailer_url',
+  // Categories
   '#cats': 'categories',
   'cats': 'categories',
+  'CATS': 'categories',
+  '#CATS': 'categories',
+  '#categories': 'categories',
+  'categories': 'categories',
+  'CATEGORIES': 'categories',
+  '#CATEGORIES': 'categories',
+  // Pornstars
   '#pstarts': 'pornstars',
   'pstarts': 'pornstars',
+  'PSTARTS': 'pornstars',
+  '#PSTARTS': 'pornstars',
   '#pstars': 'pornstars',
   'pstars': 'pornstars',
+  'PSTARS': 'pornstars',
+  '#PSTARS': 'pornstars',
+  '#pornstars': 'pornstars',
+  'pornstars': 'pornstars',
+  'PORNSTARS': 'pornstars',
+  '#PORNSTARS': 'pornstars',
   // Generic mappings for all tables
   '#name': 'name',
-  'name': 'name'
+  'name': 'name',
+  'NAME': 'name',
+  '#NAME': 'name'
 };
 
 // Function to normalize column names (remove BOM/# prefix, convert to lowercase)
@@ -136,7 +209,11 @@ const parseCsvRows = async (rawContent, requiredColumns) => {
     .filter(line => line.trim() !== '')
     .slice(0, 5);
   const firstLine = lines[0] || '';
-  const delimiters = ['|', ',', '\t', ';'];
+  
+  // Detect delimiter by counting occurrences in first few lines.
+  // `|` is the expected column separator for affiliate exports.
+  // `;` is used inside cells (thumbnails/categories/pornstars), so do not treat it as a column delimiter.
+  const delimiters = ['|', ',', '\t'];
   const delimiterCounts = delimiters.reduce((acc, delim) => {
     acc[delim] = 0;
     return acc;
@@ -144,63 +221,232 @@ const parseCsvRows = async (rawContent, requiredColumns) => {
 
   for (const line of lines) {
     for (const delim of delimiters) {
-      delimiterCounts[delim] += (line.match(new RegExp(`\\${delim}`, 'g')) || []).length;
+      // Escape special regex characters for pipe
+      const escapedDelim = delim === '|' ? '\\|' : delim === '\t' ? '\\t' : delim;
+      const matches = line.match(new RegExp(escapedDelim, 'g'));
+      if (matches) {
+        delimiterCounts[delim] += matches.length;
+      }
     }
   }
 
+  // Prioritize pipe delimiter if found, otherwise use the most common
   const detectedDelimiter = delimiterCounts['|'] > 0
     ? '|'
     : (Object.entries(delimiterCounts)
         .filter(([delim]) => delim !== '|')
         .sort((a, b) => b[1] - a[1])[0]?.[0] || ',');
 
-  let normalizedContent = rawContent;
-  if (detectedDelimiter && firstLine) {
-    const hasDetected = firstLine.includes(detectedDelimiter);
-    const hasTabs = firstLine.includes('\t');
-    if (!hasDetected && hasTabs && detectedDelimiter !== '\t') {
-      const [header, ...rest] = rawContent.split(/\r?\n/);
-      const fixedHeader = header.replace(/\t/g, detectedDelimiter);
-      normalizedContent = [fixedHeader, ...rest].join('\n');
+  console.log('[CSV Parser] Detected delimiter:', detectedDelimiter, 'Counts:', delimiterCounts);
+
+  // Manual parser for pipe-delimited files (more reliable than csv-parser for pipes)
+  const parsePipeDelimited = (content) => {
+    const stripWrappingQuotes = (value) => {
+      const trimmed = String(value ?? '').trim();
+      if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+        return trimmed.slice(1, -1).replace(/""/g, '"').trim();
+      }
+      return trimmed;
+    };
+
+    const unwrapQuotedLine = (line) => {
+      const trimmed = String(line ?? '').trim();
+      if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
+        return trimmed.slice(1, -1);
+      }
+      return trimmed;
+    };
+
+    const lines = content.split(/\r?\n/).filter(line => line.trim() !== '');
+    if (lines.length === 0) {
+      console.log('[CSV Parser] No lines found in content');
+      return [];
     }
-  }
+    
+    const firstLine = lines[0].trim();
+    if (!firstLine.includes('|')) {
+      console.log('[CSV Parser] First line does not contain pipe delimiter');
+      return [];
+    }
+    
+    const headers = firstLine
+      .split('|')
+      .map(h => stripWrappingQuotes(h).replace(/^\uFEFF/, '').trim())
+      .filter(h => h !== '');
+    console.log('[CSV Parser] Manual parser found', headers.length, 'headers:', headers);
+    
+    if (headers.length === 0) {
+      console.log('[CSV Parser] No valid headers found');
+      return [];
+    }
+    
+    const rows = [];
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      // Some generators wrap the entire row in quotes:
+      // "col1|col2|col3"
+      // unwrap first so `|` splitting remains consistent.
+      const unwrappedLine = unwrapQuotedLine(line);
+      const values = unwrappedLine.split('|').map(v => stripWrappingQuotes(v));
+      if (values.length === 0 || values.every(v => v === '')) continue;
+      
+      const row = {};
+      headers.forEach((header, idx) => {
+        row[header] = values[idx] !== undefined ? values[idx] : '';
+      });
+      
+      // Only add row if it has at least one non-empty value
+      if (Object.values(row).some(val => val !== '')) {
+        rows.push(row);
+      }
+    }
+    
+    console.log('[CSV Parser] Manual parser created', rows.length, 'rows');
+    return rows;
+  };
 
   const parseWithSeparator = async (separator, content) => {
+    // Use manual parser for pipe-delimited files
+    if (separator === '|') {
+      try {
+        const rows = parsePipeDelimited(content);
+        if (rows.length > 0) {
+          console.log('[CSV Parser] Manual pipe parser succeeded, parsed', rows.length, 'rows');
+          return rows;
+        }
+      } catch (err) {
+        console.error('[CSV Parser] Manual pipe parser failed:', err.message);
+      }
+    }
+    
+    // Fallback to csv-parser for other delimiters
     const rows = [];
     const stream = Readable.from(content);
     await new Promise((resolve, reject) => {
       stream
         .pipe(csv({
-          separator,
-          mapHeaders: ({ header }) => header ? header.replace(/^\uFEFF/, '').trim() : header
+          separator: separator,
+          skipEmptyLines: true,
+          skipLinesWithError: false,
+          mapHeaders: ({ header }) => {
+            if (!header) return header;
+            // Remove BOM and trim
+            return header.replace(/^\uFEFF/, '').trim();
+          }
         }))
-        .on('data', (row) => rows.push(row))
+        .on('data', (row) => {
+          // Filter out rows where all values are empty
+          const hasData = Object.values(row).some(val => val !== undefined && val !== null && String(val).trim() !== '');
+          if (hasData) {
+            rows.push(row);
+          }
+        })
         .on('end', resolve)
-        .on('error', reject);
+        .on('error', (err) => {
+          console.error('[CSV Parser] Error parsing with separator', separator, ':', err.message);
+          reject(err);
+        });
     });
     return rows;
   };
 
-  const separatorsToTry = [detectedDelimiter, '|', '\t', ',', ';'].filter(
-    (sep, idx, arr) => arr.indexOf(sep) === idx
-  );
+  // If pipe delimiter detected, try manual parser FIRST before csv-parser
+  if (detectedDelimiter === '|' || delimiterCounts['|'] > 0) {
+    console.log('[CSV Parser] Pipe delimiter detected (count:', delimiterCounts['|'], '), using manual parser first...');
+    try {
+      const manualRows = parsePipeDelimited(rawContent);
+      if (manualRows.length > 0) {
+        const fileColumns = Object.keys(manualRows[0]);
+        // Validate: must have multiple columns and no column should contain pipe character
+        const hasMultipleColumns = fileColumns.length > 1;
+        const hasInvalidColumn = fileColumns.some(col => col.includes('|'));
+        
+        console.log('[CSV Parser] Manual parser validation:', {
+          rowCount: manualRows.length,
+          columnCount: fileColumns.length,
+          hasMultipleColumns,
+          hasInvalidColumn,
+          columns: fileColumns
+        });
+        
+        if (hasMultipleColumns && !hasInvalidColumn) {
+          console.log('[CSV Parser] ✓ Manual pipe parser succeeded:', manualRows.length, 'rows,', fileColumns.length, 'columns');
+          csvRows = manualRows;
+        } else {
+          console.log('[CSV Parser] ✗ Manual parser result invalid, will try csv-parser...');
+        }
+      } else {
+        console.log('[CSV Parser] Manual parser returned 0 rows, will try csv-parser...');
+      }
+    } catch (err) {
+      console.error('[CSV Parser] Manual pipe parser error:', err.message, err.stack);
+    }
+  }
 
-  for (const sep of separatorsToTry) {
-    csvRows = await parseWithSeparator(sep, normalizedContent);
-    if (csvRows.length === 0) continue;
-
-    const fileColumns = Object.keys(csvRows[0]);
-    const mappedColumns = fileColumns.map(col => mapColumnName(col).toLowerCase());
-    const missingRequired = requiredColumns.filter(
-      col => !mappedColumns.includes(col.toLowerCase())
+  // If manual parser didn't work or wasn't used, try csv-parser with different separators
+  if (csvRows.length === 0) {
+    const separatorsToTry = [detectedDelimiter, '|', ',', '\t'].filter(
+      (sep, idx, arr) => arr.indexOf(sep) === idx
     );
-    if (missingRequired.length === 0) break;
+
+    for (const sep of separatorsToTry) {
+      try {
+        const parsedRows = await parseWithSeparator(sep, rawContent);
+        if (parsedRows.length === 0) {
+          console.log(`[CSV Parser] No rows parsed with separator "${sep}", trying next...`);
+          continue;
+        }
+
+        const fileColumns = Object.keys(parsedRows[0]);
+        console.log(`[CSV Parser] Parsed ${parsedRows.length} rows with separator "${sep}"`);
+        console.log('[CSV Parser] File columns:', fileColumns);
+        
+        // Validate: reject results where column names contain the separator (means it wasn't split properly)
+        // Also reject if we only have one column (likely means parsing failed)
+        const hasInvalidColumns = fileColumns.some(col => {
+          if (sep === '|') {
+            // For pipe, check if column contains pipe AND has multiple pipe-separated parts
+            return col.includes('|') && col.split('|').length > 2;
+          } else {
+            return col.includes(sep);
+          }
+        });
+        
+        if (hasInvalidColumns || fileColumns.length === 1) {
+          console.log(`[CSV Parser] Invalid parsing detected (columns: ${fileColumns.length}, has invalid: ${hasInvalidColumns}), trying next...`);
+          continue;
+        }
+        
+        const mappedColumns = fileColumns.map(col => mapColumnName(col).toLowerCase());
+        const missingRequired = requiredColumns.filter(
+          col => !mappedColumns.includes(col.toLowerCase())
+        );
+        
+        if (missingRequired.length === 0) {
+          console.log('[CSV Parser] All required columns found, using separator:', sep);
+          csvRows = parsedRows;
+          break;
+        } else {
+          console.log('[CSV Parser] Missing required columns:', missingRequired, 'trying next separator...');
+        }
+      } catch (err) {
+        console.error(`[CSV Parser] Error with separator "${sep}":`, err.message);
+        continue;
+      }
+    }
   }
 
   // If still empty or missing, try whitespace-delimited fallback
   if (csvRows.length === 0) {
+    console.log('[CSV Parser] Trying whitespace-delimited fallback...');
     const whitespaceNormalized = rawContent.replace(/ {2,}/g, '\t');
-    csvRows = await parseWithSeparator('\t', whitespaceNormalized);
+    try {
+      csvRows = await parseWithSeparator('\t', whitespaceNormalized);
+    } catch (err) {
+      console.error('[CSV Parser] Whitespace fallback failed:', err.message);
+    }
   }
 
   return csvRows;
@@ -651,40 +897,52 @@ const handleAffiliateVideosUpload = async (rows, mappedFileColumns, allColumns, 
   const pornstarCache = new Map();
   const channelCache = new Map();
 
-  const getOrCreateId = async (tableName, name, cache) => {
-    if (cache.has(name)) return cache.get(name);
-    const [existing] = await connection.execute(
-      `SELECT id FROM \`${tableName}\` WHERE name = ?`,
-      [name]
-    );
-    let id;
-    if (existing.length === 0) {
-      const [result] = await connection.execute(
-        `INSERT IGNORE INTO \`${tableName}\` (name) VALUES (?)`,
-        [name]
-      );
-      if (result.insertId) {
-        id = result.insertId;
-      } else {
-        const [created] = await connection.execute(
-          `SELECT id FROM \`${tableName}\` WHERE name = ?`,
-          [name]
-        );
-        id = created[0]?.id;
-      }
-    } else {
-      id = existing[0].id;
-    }
-    cache.set(name, id);
-    return id;
-  };
-
   const chunkArray = (arr, size) => {
     const chunks = [];
     for (let i = 0; i < arr.length; i += size) {
       chunks.push(arr.slice(i, i + size));
     }
     return chunks;
+  };
+
+  const hydrateNameCache = async (tableName, nameSet, cache) => {
+    if (!nameSet || nameSet.size === 0) return;
+    const allNames = [...nameSet].map(n => String(n).trim()).filter(Boolean);
+    if (allNames.length === 0) return;
+
+    const nameChunks = chunkArray(allNames, 500);
+
+    // 1) Preload existing IDs in batches.
+    for (const chunk of nameChunks) {
+      const placeholders = chunk.map(() => '?').join(', ');
+      const [existingRows] = await connection.execute(
+        `SELECT id, name FROM \`${tableName}\` WHERE name IN (${placeholders})`,
+        chunk
+      );
+      existingRows.forEach(row => cache.set(row.name, row.id));
+    }
+
+    // 2) Insert only missing names in bulk.
+    const missingNames = allNames.filter(name => !cache.has(name));
+    if (missingNames.length > 0) {
+      const missingChunks = chunkArray(missingNames, 500);
+      for (const chunk of missingChunks) {
+        await connection.query(
+          `INSERT IGNORE INTO \`${tableName}\` (name) VALUES ?`,
+          [chunk.map(name => [name])]
+        );
+      }
+
+      // 3) Reload IDs for previously missing names.
+      for (const chunk of missingChunks) {
+        const placeholders = chunk.map(() => '?').join(', ');
+        const [rowsAfterInsert] = await connection.execute(
+          `SELECT id, name FROM \`${tableName}\` WHERE name IN (${placeholders})`,
+          chunk
+        );
+        rowsAfterInsert.forEach(row => cache.set(row.name, row.id));
+      }
+    }
   };
 
   try {
@@ -729,6 +987,44 @@ const handleAffiliateVideosUpload = async (rows, mappedFileColumns, allColumns, 
     const pornstarLinks = [];
     const channelLinks = [];
 
+    // Build unique names first, then resolve IDs in bulk to avoid N+1 queries for large CSV uploads.
+    const categoryNameSet = new Set();
+    const pornstarNameSet = new Set();
+    const channelNameSet = new Set();
+
+    for (const row of rows) {
+      const catValue = getMappedValue(row, 'categories');
+      if (catValue) {
+        String(catValue)
+          .split(';')
+          .map(name => name.trim())
+          .filter(Boolean)
+          .forEach(name => categoryNameSet.add(name));
+      }
+
+      const pornValue = getMappedValue(row, 'pornstars');
+      if (pornValue) {
+        String(pornValue)
+          .split(';')
+          .map(name => name.trim())
+          .filter(Boolean)
+          .forEach(name => pornstarNameSet.add(name));
+      }
+
+      const channelValue = getMappedValue(row, 'channels');
+      if (channelValue) {
+        String(channelValue)
+          .split(';')
+          .map(name => name.trim())
+          .filter(Boolean)
+          .forEach(name => channelNameSet.add(name));
+      }
+    }
+
+    await hydrateNameCache('affiliate_categories', categoryNameSet, categoryCache);
+    await hydrateNameCache('affiliate_pornstars', pornstarNameSet, pornstarCache);
+    await hydrateNameCache('affiliate_channels', channelNameSet, channelCache);
+
     for (const row of rows) {
       try {
         const providerId = getMappedValue(row, 'provider_video_id');
@@ -753,9 +1049,9 @@ const handleAffiliateVideosUpload = async (rows, mappedFileColumns, allColumns, 
 
         const catValue = getMappedValue(row, 'categories');
         if (catValue) {
-          const names = catValue.split(';').map(c => c.trim()).filter(Boolean);
+          const names = String(catValue).split(';').map(c => c.trim()).filter(Boolean);
           for (const name of names) {
-            const categoryId = await getOrCreateId('affiliate_categories', name, categoryCache);
+            const categoryId = categoryCache.get(name);
             if (categoryId) {
               categoryLinks.push([videoId, categoryId]);
             }
@@ -764,9 +1060,9 @@ const handleAffiliateVideosUpload = async (rows, mappedFileColumns, allColumns, 
 
         const pornValue = getMappedValue(row, 'pornstars');
         if (pornValue) {
-          const names = pornValue.split(';').map(p => p.trim()).filter(Boolean);
+          const names = String(pornValue).split(';').map(p => p.trim()).filter(Boolean);
           for (const name of names) {
-            const pornstarId = await getOrCreateId('affiliate_pornstars', name, pornstarCache);
+            const pornstarId = pornstarCache.get(name);
             if (pornstarId) {
               pornstarLinks.push([videoId, pornstarId]);
             }
@@ -775,9 +1071,9 @@ const handleAffiliateVideosUpload = async (rows, mappedFileColumns, allColumns, 
 
         const channelValue = getMappedValue(row, 'channels');
         if (channelValue) {
-          const names = channelValue.split(';').map(c => c.trim()).filter(Boolean);
+          const names = String(channelValue).split(';').map(c => c.trim()).filter(Boolean);
           for (const name of names) {
-            const channelId = await getOrCreateId('affiliate_channels', name, channelCache);
+            const channelId = channelCache.get(name);
             if (channelId) {
               channelLinks.push([videoId, channelId]);
             }
