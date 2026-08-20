@@ -44,7 +44,7 @@ router.get('/videos', async (req, res) => {
       LEFT JOIN affiliate_video_channels vch ON v.id = vch.video_id
       LEFT JOIN affiliate_channels ch ON vch.channel_id = ch.id
       GROUP BY v.id
-      ORDER BY v.published_at DESC, v.created_at DESC
+      ORDER BY v.published_at DESC, v.created_at DESC, v.id DESC
       LIMIT ${limitValue} OFFSET ${offsetValue}
     `);
 
@@ -212,7 +212,7 @@ router.get('/videos/category/:categoryId', async (req, res) => {
       LEFT JOIN affiliate_pornstars p ON vp.pornstar_id = p.id
       WHERE vc.category_id = ?
       GROUP BY v.id
-      ORDER BY v.published_at DESC, v.created_at DESC
+      ORDER BY v.published_at DESC, v.created_at DESC, v.id DESC
       LIMIT ${limitValue} OFFSET ${offsetValue}
     `, [categoryId]);
 
@@ -310,7 +310,7 @@ router.get('/videos/pornstar/:pornstarId', async (req, res) => {
       LEFT JOIN affiliate_pornstars p ON vp2.pornstar_id = p.id
       WHERE vp.pornstar_id = ?
       GROUP BY v.id
-      ORDER BY v.published_at DESC, v.created_at DESC
+      ORDER BY v.published_at DESC, v.created_at DESC, v.id DESC
       LIMIT ${limitValue} OFFSET ${offsetValue}
     `, [pornstarId]);
 
@@ -416,7 +416,7 @@ router.get('/search', async (req, res) => {
       LEFT JOIN affiliate_channels ch ON vch.channel_id = ch.id
       WHERE v.title LIKE ? OR v.description LIKE ? OR c.name LIKE ? OR p.name LIKE ? OR ch.name LIKE ?
       GROUP BY v.id
-      ORDER BY v.published_at DESC, v.created_at DESC
+      ORDER BY v.published_at DESC, v.created_at DESC, v.id DESC
       LIMIT ${limitValue} OFFSET ${offsetValue}`,
       [likeQuery, likeQuery, likeQuery, likeQuery, likeQuery]
     );
@@ -564,7 +564,7 @@ router.get('/videos/:id/recommendations', async (req, res) => {
       LEFT JOIN affiliate_channels ch ON vch.channel_id = ch.id
       WHERE ${whereClause}
       GROUP BY v.id
-      ORDER BY match_score DESC, v.published_at DESC, v.created_at DESC
+      ORDER BY match_score DESC, v.published_at DESC, v.created_at DESC, v.id DESC
       LIMIT ${limitValue} OFFSET ${offsetValue}`,
       [...scoreParams, ...params]
     );
@@ -596,7 +596,7 @@ router.get('/videos/:id/recommendations', async (req, res) => {
         LEFT JOIN affiliate_channels ch ON vch.channel_id = ch.id
         WHERE v.id <> ?
         GROUP BY v.id
-        ORDER BY v.published_at DESC, v.created_at DESC
+        ORDER BY v.published_at DESC, v.created_at DESC, v.id DESC
         LIMIT ${limitValue} OFFSET ${offsetValue}`,
         [videoId]
       );
@@ -694,7 +694,7 @@ router.get('/videos/channel/:channelId', async (req, res) => {
       LEFT JOIN affiliate_pornstars p ON vp.pornstar_id = p.id
       WHERE vc.channel_id = ?
       GROUP BY v.id
-      ORDER BY v.published_at DESC, v.created_at DESC
+      ORDER BY v.published_at DESC, v.created_at DESC, v.id DESC
       LIMIT ${limitValue} OFFSET ${offsetValue}
     `, [channelId]);
 
